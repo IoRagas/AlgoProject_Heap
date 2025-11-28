@@ -1,0 +1,57 @@
+# Build trees
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+Testing/
+CMakeScripts/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+compile_commands.json
+
+# Visual Studio generated files
+*.VC.db
+*.VC.opendb
+*.opendb
+*.db
+*.suo
+*.user
+*.userosscache
+*.sdf
+*.cachefile
+*.log
+*.tlog
+*.lastbuildstate
+ipch/
+*.VC.db-shm
+*.VC.db-wal
+
+# VS settings
+.vs/
+.vscode/
+
+# Visual Studio build directories
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Ww][Ii][Nn]64/
+ARM/
+ARM64/
+
+# Generated binaries
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+*.exe
+*.pdb
+*.ilk
+
+# Other
+*.DS_Store
