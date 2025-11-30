@@ -19,7 +19,9 @@ public:
 
     BinaryHeapNode* insert(long long key, int value) override;
     std::pair<long long, int> extract_min() override;
+    std::pair<long long, int> peek_min() const override;
     void decrease_key(BinaryHeapNode* node, long long new_key) override;
+    void merge(PriorityQueue& other) override;
     bool is_empty() const override;
 
 private:

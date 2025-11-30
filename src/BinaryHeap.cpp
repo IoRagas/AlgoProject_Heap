@@ -30,11 +30,35 @@ std::pair<long long, int> BinaryHeap::extract_min() {
     return result;
 }
 
+std::pair<long long, int> BinaryHeap::peek_min() const {
+    if (heap_.empty()) throw std::runtime_error("peek_min from empty heap");
+    BinaryHeapNode* root = heap_.front();
+    return {root->key, root->value};
+}
+
 void BinaryHeap::decrease_key(BinaryHeapNode* node, long long new_key) {
     if (!node) throw std::invalid_argument("node is null");
     if (new_key > node->key) throw std::invalid_argument("new_key is greater than current key");
     node->key = new_key;
     heapify_up(node->index);
+}
+
+void BinaryHeap::merge(PriorityQueue<BinaryHeapNode>& other_base) {
+    auto* other = dynamic_cast<BinaryHeap*>(&other_base);
+    if (!other) throw std::invalid_argument("merge requires another BinaryHeap");
+    if (other == this || other->heap_.empty()) return;
+
+    heap_.reserve(heap_.size() + other->heap_.size());
+    for (auto* node : other->heap_) {
+        node->index = static_cast<int>(heap_.size());
+        heap_.push_back(node);
+    }
+    other->heap_.clear();
+
+    if (heap_.empty()) return;
+    for (int i = static_cast<int>(heap_.size() / 2) - 1; i >= 0; --i) {
+        heapify_down(i);
+    }
 }
 
 bool BinaryHeap::is_empty() const {
