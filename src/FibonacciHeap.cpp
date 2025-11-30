@@ -16,6 +16,7 @@ FibonacciHeapNode* make_node(long long key, int value) {
     node->right = node;
     node->degree = 0;
     node->mark = false;
+    node->subtree_height = 0;
     return node;
 }
 
@@ -31,7 +32,7 @@ void concatenate_root_lists(FibonacciHeapNode* a, FibonacciHeapNode* b) {
 }
 }
 
-FibonacciHeap::FibonacciHeap() : min_(nullptr), size_(0) {}
+FibonacciHeap::FibonacciHeap() : min_(nullptr), size_(0), root_count_(0) {}
 
 FibonacciHeap::~FibonacciHeap() {
     delete_all(min_);
@@ -47,6 +48,8 @@ FibonacciHeapNode* FibonacciHeap::insert(long long key, int value) {
     auto* node = make_node(key, value);
     add_to_root_list(node);
     ++size_;
+    update_size_metrics();
+    note_tree_height(node->subtree_height);
     return node;
 }
 
@@ -78,6 +81,7 @@ std::pair<long long, int> FibonacciHeap::extract_min() {
 
     remove_from_root_list(z);
     --size_;
+    update_size_metrics();
 
     if (min_) {
         consolidate();
@@ -123,16 +127,24 @@ void FibonacciHeap::merge(PriorityQueue<FibonacciHeapNode>& other_base) {
     if (!min_) {
         min_ = other->min_;
         size_ = other->size_;
+        root_count_ = other->root_count_;
     } else {
         concatenate_root_lists(min_, other->min_);
         if (other->min_->key < min_->key) {
             min_ = other->min_;
         }
         size_ += other->size_;
+        root_count_ += other->root_count_;
     }
+
+    if (root_count_ > stats_.max_roots) {
+        stats_.max_roots = root_count_;
+    }
+    update_size_metrics();
 
     other->min_ = nullptr;
     other->size_ = 0;
+    other->root_count_ = 0;
 }
 
 void FibonacciHeap::add_to_root_list(FibonacciHeapNode* node) {
@@ -142,6 +154,11 @@ void FibonacciHeap::add_to_root_list(FibonacciHeapNode* node) {
         node->parent = nullptr;
         node->mark = false;
         min_ = node;
+        root_count_ = 1;
+        note_tree_height(node->subtree_height);
+        if (stats_.max_roots < root_count_) {
+            stats_.max_roots = root_count_;
+        }
         return;
     }
 
@@ -151,8 +168,13 @@ void FibonacciHeap::add_to_root_list(FibonacciHeapNode* node) {
     min_->left = node;
     node->parent = nullptr;
     node->mark = false;
+    ++root_count_;
+    note_tree_height(node->subtree_height);
     if (node->key < min_->key) {
         min_ = node;
+    }
+    if (stats_.max_roots < root_count_) {
+        stats_.max_roots = root_count_;
     }
 }
 
@@ -160,11 +182,15 @@ void FibonacciHeap::remove_from_root_list(FibonacciHeapNode* node) {
     if (!node) return;
     if (node->right == node) {
         min_ = nullptr;
+        root_count_ = 0;
     } else {
         node->left->right = node->right;
         node->right->left = node->left;
         if (min_ == node) {
             min_ = node->right;
+        }
+        if (root_count_ > 0) {
+            --root_count_;
         }
     }
     node->left = node->right = node;
@@ -184,10 +210,18 @@ void FibonacciHeap::link_nodes(FibonacciHeapNode* child, FibonacciHeapNode* pare
         parent->child->left = child;
     }
     parent->degree++;
+    const int candidate_height = child->subtree_height + 1;
+    if (candidate_height > parent->subtree_height) {
+        parent->subtree_height = candidate_height;
+        note_tree_height(parent->subtree_height);
+    }
+    stats_.link_operations++;
 }
 
 void FibonacciHeap::consolidate() {
     if (!min_) return;
+
+    stats_.consolidation_passes++;
 
     std::vector<FibonacciHeapNode*> roots;
     FibonacciHeapNode* current = min_;
@@ -226,6 +260,7 @@ void FibonacciHeap::consolidate() {
     }
 
     min_ = nullptr;
+    root_count_ = 0;
     for (auto* node : degree_table) {
         if (!node) continue;
         node->left = node->right = node;
@@ -278,5 +313,25 @@ void FibonacciHeap::delete_all(FibonacciHeapNode* node) {
         delete current;
         current = next;
     } while (current != start);
+}
+
+void FibonacciHeap::update_size_metrics() {
+    stats_.current_nodes = size_;
+    if (stats_.current_nodes > stats_.max_nodes) {
+        stats_.max_nodes = stats_.current_nodes;
+    }
+    if (root_count_ > stats_.max_roots) {
+        stats_.max_roots = root_count_;
+    }
+}
+
+void FibonacciHeap::note_tree_height(int subtree_height) {
+    if (subtree_height < 0) {
+        return;
+    }
+    const std::size_t height = static_cast<std::size_t>(subtree_height + 1);
+    if (height > stats_.max_tree_height) {
+        stats_.max_tree_height = height;
+    }
 }
 

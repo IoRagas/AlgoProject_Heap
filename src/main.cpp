@@ -67,14 +67,18 @@ bool prompt_yes_no(const std::string& prompt, bool default_value) {
 }
 
 void print_distance_sample(const std::vector<long long>& distances, int sample_count) {
+    const bool print_all = sample_count <= 0;
     int printed = 0;
-    for (std::size_t node = 0; node < distances.size() && printed < sample_count; ++node) {
+    for (std::size_t node = 0; node < distances.size(); ++node) {
         long long dist = distances[node];
         if (dist >= kInfinity) {
             continue;
         }
         std::cout << "  Node " << node << " -> distance " << dist << '\n';
         ++printed;
+        if (!print_all && printed >= sample_count) {
+            break;
+        }
     }
     if (printed == 0) {
         std::cout << "  No reachable nodes to display." << std::endl;
@@ -102,6 +106,7 @@ struct RunSummary {
     int farthest_node = -1;
     long long farthest_distance = 0;
     QueueMetrics metrics;
+    HeapStructureStats structure;
 };
 
 struct WorkloadStats {
@@ -109,6 +114,7 @@ struct WorkloadStats {
     std::size_t operations = 0;
     QueueMetrics metrics;
     long long total_runtime_ms = 0;
+    HeapStructureStats structure;
 };
 
 RunSummary execute_run(const Graph& graph, int source, HeapSelection selection, DijkstraResult* out_result) {
@@ -121,6 +127,7 @@ RunSummary execute_run(const Graph& graph, int source, HeapSelection selection, 
     summary.heap = selection;
     summary.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start).count();
     summary.metrics = result.metrics;
+    summary.structure = result.structure;
 
     for (std::size_t node = 0; node < result.distances.size(); ++node) {
         long long dist = result.distances[node];
@@ -214,6 +221,42 @@ std::filesystem::path resolve_dataset_path(const std::string& relative, const st
     return {};
 }
 
+template <typename Collection, typename LabelAccessor>
+std::string format_structure_table(const Collection& items, const std::string& title, LabelAccessor label_accessor) {
+    if (items.empty()) {
+        return {};
+    }
+
+    std::ostringstream oss;
+    oss << title << '\n';
+    oss << std::left << std::setw(12) << "Heap" << std::right
+        << std::setw(12) << "MaxNodes"
+        << std::setw(12) << "Height"
+        << std::setw(12) << "MaxRoots"
+        << std::setw(16) << "ConsolPasses"
+        << std::setw(12) << "LinkOps" << '\n';
+    oss << std::string(76, '-') << '\n';
+    for (const auto& item : items) {
+        const auto& stats = item.structure;
+        oss << std::left << std::setw(12) << label_accessor(item) << std::right
+            << std::setw(12) << stats.max_nodes
+            << std::setw(12) << stats.max_tree_height
+            << std::setw(12) << stats.max_roots
+            << std::setw(16) << stats.consolidation_passes
+            << std::setw(12) << stats.link_operations
+            << '\n';
+    }
+    return oss.str();
+}
+
+void print_structure_metrics(const HeapStructureStats& stats) {
+    std::cout << "Max nodes      : " << stats.max_nodes << std::endl;
+    std::cout << "Max tree height: " << stats.max_tree_height << std::endl;
+    std::cout << "Max roots      : " << stats.max_roots << std::endl;
+    std::cout << "Consolidations : " << stats.consolidation_passes << std::endl;
+    std::cout << "Link operations: " << stats.link_operations << std::endl;
+}
+
 std::string format_summary_table(const std::vector<RunSummary>& runs, const std::string& dataset_name) {
     std::ostringstream oss;
     oss << "=== Batch Summary for " << dataset_name << " ===\n";
@@ -246,7 +289,15 @@ std::string format_summary_table(const std::vector<RunSummary>& runs, const std:
             << '\n';
     }
     oss.unsetf(std::ios::floatfield);
-    return oss.str();
+    std::string report = oss.str();
+    std::string structure_section = format_structure_table(
+        runs,
+        "=== Structural Metrics for " + dataset_name + " ===",
+        [](const RunSummary& run) { return heap_name(run.heap); });
+    if (!structure_section.empty()) {
+        report += '\n' + structure_section;
+    }
+    return report;
 }
 
 void write_summary_report(const std::string& report, const std::filesystem::path& out_path) {
@@ -293,7 +344,15 @@ std::string format_workload_table(const std::vector<WorkloadStats>& workloads, s
             << '\n';
     }
     oss.unsetf(std::ios::floatfield);
-    return oss.str();
+    std::string report = oss.str();
+    std::string structure_section = format_structure_table(
+        workloads,
+        "=== Structural Metrics for Random Workload (" + std::to_string(operations) + " ops) ===",
+        [](const WorkloadStats& run) { return heap_name(run.heap); });
+    if (!structure_section.empty()) {
+        report += '\n' + structure_section;
+    }
+    return report;
 }
 
 template <typename HeapType, typename HandleType>
@@ -408,6 +467,7 @@ WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
     stats.operations = operations;
     stats.metrics = metrics;
     stats.total_runtime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
+    stats.structure = heap.structure_stats();
     return stats;
 }
 
@@ -582,11 +642,26 @@ int main(int argc, char** argv) try {
     std::cout << "Extract ops  : " << metrics.extract_count
               << " avg " << average_us(metrics.extract_time_ns, metrics.extract_count) << " us" << std::endl;
 
+    std::cout << "(Dijkstra already processed the full dataset; the next prompt only controls how many results to display.)" << std::endl;
+
+    std::cout << "\nStructural metrics:" << std::endl;
+    print_structure_metrics(summary.structure);
+
     std::cout.unsetf(std::ios::floatfield);
     std::cout << std::setprecision(6);
 
-    std::cout << "\nSample distances (first 10 reachable nodes):" << std::endl;
-    print_distance_sample(result.distances, 10);
+    int sample_limit = read_int_with_default(
+        "How many reachable nodes to display? [0 = all, default: 10]: ", 10);
+    if (sample_limit < 0) {
+        sample_limit = 0;
+    }
+
+    if (sample_limit == 0) {
+        std::cout << "\nDistances for all reachable nodes:" << std::endl;
+    } else {
+        std::cout << "\nSample distances (first " << sample_limit << " reachable nodes):" << std::endl;
+    }
+    print_distance_sample(result.distances, sample_limit);
 
     std::cout << "\nPress Enter to exit..." << std::endl;
     std::cin.get();

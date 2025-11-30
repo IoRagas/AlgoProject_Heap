@@ -64,6 +64,8 @@ HollowHeapCell* HollowHeap::link(HollowHeapCell* u, HollowHeapCell* v) {
     if (!u) return v;
     if (!v) return u;
 
+    stats_.link_operations++;
+
     HollowHeapCell* parent = u;
     HollowHeapCell* child = v;
 
@@ -89,6 +91,8 @@ HollowHeapNode* HollowHeap::insert(long long key, int value) {
     handle->cell = cell;
     active_size_++;
     root_ = link(root_, cell);
+    note_rank_as_height(cell->rank);
+    update_size_metrics();
     return handle;
 }
 
@@ -111,6 +115,7 @@ void HollowHeap::decrease_key(HollowHeapNode* handle, long long new_key) {
     if (node->rank > 2) {
         new_cell->rank = node->rank - 2;
     }
+    note_rank_as_height(new_cell->rank);
     node->hollow = true;
 
     if (!root_) {
@@ -130,6 +135,8 @@ std::pair<long long, int> HollowHeap::extract_min() {
     if (!root_) {
         throw std::runtime_error("extract_min from empty HollowHeap");
     }
+
+    stats_.consolidation_passes++;
 
     HollowHeapCell* old_root = root_;
     std::pair<long long, int> result(old_root->key, old_root->value);
@@ -160,6 +167,7 @@ std::pair<long long, int> HollowHeap::extract_min() {
                     slot = nullptr;
                     cur = link(cur, other);
                     cur->rank++;
+                    note_rank_as_height(cur->rank);
                 }
                 ensure_rank_capacity(cur->rank);
                 rankmap_[cur->rank] = cur;
@@ -205,6 +213,8 @@ std::pair<long long, int> HollowHeap::extract_min() {
         clear_rankmap();
     }
 
+    update_size_metrics();
+
     return result;
 }
 
@@ -243,4 +253,24 @@ void HollowHeap::merge(PriorityQueue<HollowHeapNode>& other_base) {
     other->root_ = nullptr;
     other->rankmap_.assign(kInitialRankCapacity, nullptr);
     other->to_delete_.clear();
+
+    update_size_metrics();
+}
+
+void HollowHeap::update_size_metrics() {
+    stats_.current_nodes = active_size_;
+    if (stats_.current_nodes > stats_.max_nodes) {
+        stats_.max_nodes = stats_.current_nodes;
+    }
+    const std::size_t roots = root_ ? 1u : 0u;
+    if (roots > stats_.max_roots) {
+        stats_.max_roots = roots;
+    }
+}
+
+void HollowHeap::note_rank_as_height(unsigned rank) {
+    const std::size_t height = static_cast<std::size_t>(rank + 1);
+    if (height > stats_.max_tree_height) {
+        stats_.max_tree_height = height;
+    }
 }

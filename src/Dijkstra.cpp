@@ -70,6 +70,10 @@ public:
 
     const QueueMetrics& metrics() const override { return metrics_; }
 
+    const HeapStructureStats& structure_stats() const override {
+        return heap_->structure_stats();
+    }
+
 private:
     std::unique_ptr<HeapType> heap_;
     std::vector<HandleType*> handles_;
@@ -132,5 +136,6 @@ DijkstraResult run_dijkstra(const Graph& graph, int source, DijkstraQueue& queue
     }
 
     result.metrics = queue.metrics();
+    result.structure = queue.structure_stats();
     return result;
 }

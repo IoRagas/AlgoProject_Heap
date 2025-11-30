@@ -10,6 +10,7 @@ BinaryHeapNode* BinaryHeap::insert(long long key, int value) {
     auto* node = new BinaryHeapNode{key, value, static_cast<int>(heap_.size())};
     heap_.push_back(node);
     heapify_up(node->index);
+    update_size_metrics();
     return node;
 }
 
@@ -27,6 +28,7 @@ std::pair<long long, int> BinaryHeap::extract_min() {
     }
 
     delete root;
+    update_size_metrics();
     return result;
 }
 
@@ -59,6 +61,7 @@ void BinaryHeap::merge(PriorityQueue<BinaryHeapNode>& other_base) {
     for (int i = static_cast<int>(heap_.size() / 2) - 1; i >= 0; --i) {
         heapify_down(i);
     }
+    update_size_metrics();
 }
 
 bool BinaryHeap::is_empty() const {
@@ -69,6 +72,7 @@ void BinaryHeap::swap_at(int i, int j) {
     std::swap(heap_[i], heap_[j]);
     heap_[i]->index = i;
     heap_[j]->index = j;
+    stats_.link_operations++;
 }
 
 void BinaryHeap::heapify_up(int i) {
@@ -81,6 +85,7 @@ void BinaryHeap::heapify_up(int i) {
 }
 
 void BinaryHeap::heapify_down(int i) {
+    bool rearranged = false;
     int n = static_cast<int>(heap_.size());
     while (true) {
         int l = left(i), r = right(i);
@@ -90,5 +95,34 @@ void BinaryHeap::heapify_down(int i) {
         if (smallest == i) break;
         swap_at(i, smallest);
         i = smallest;
+        rearranged = true;
+    }
+    if (rearranged) {
+        stats_.consolidation_passes++;
+    }
+}
+
+std::size_t BinaryHeap::compute_height(std::size_t nodes) {
+    if (nodes == 0) return 0;
+    std::size_t height = 0;
+    while (nodes > 0) {
+        nodes >>= 1U;
+        ++height;
+    }
+    return height;
+}
+
+void BinaryHeap::update_size_metrics() {
+    stats_.current_nodes = heap_.size();
+    if (stats_.current_nodes > stats_.max_nodes) {
+        stats_.max_nodes = stats_.current_nodes;
+    }
+    const std::size_t height = compute_height(stats_.current_nodes);
+    if (height > stats_.max_tree_height) {
+        stats_.max_tree_height = height;
+    }
+    const std::size_t roots = stats_.current_nodes > 0 ? 1u : 0u;
+    if (roots > stats_.max_roots) {
+        stats_.max_roots = roots;
     }
 }

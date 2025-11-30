@@ -1,5 +1,6 @@
 #pragma once
 
+#include "HeapStats.h"
 #include "PriorityQueue.h"
 #include <cstddef>
 #include <utility>
@@ -24,6 +25,7 @@ public:
 	void decrease_key(HollowHeapNode* node, long long new_key) override;
 	void merge(PriorityQueue& other) override;
 	bool is_empty() const override;
+	const HeapStructureStats& structure_stats() const { return stats_; }
 
 private:
 	HollowHeapNode* make_handle();
@@ -39,4 +41,8 @@ private:
 	std::vector<std::unique_ptr<HollowHeapCell>> cells_;
 	std::vector<HollowHeapCell*> rankmap_;
 	std::vector<HollowHeapCell*> to_delete_;
+	HeapStructureStats stats_{};
+
+	void update_size_metrics();
+	void note_rank_as_height(unsigned rank);
 };

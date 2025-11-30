@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Graph.h"
+#include "HeapStats.h"
 
 struct QueueMetrics {
     std::size_t insert_count = 0;
@@ -20,6 +21,7 @@ struct DijkstraResult {
     std::vector<long long> distances;
     std::vector<int> parents;
     QueueMetrics metrics;
+    HeapStructureStats structure;
 };
 
 enum class HeapSelection {
@@ -36,6 +38,7 @@ public:
     virtual std::pair<long long, int> extract_min() = 0;
     virtual bool empty() const = 0;
     virtual const QueueMetrics& metrics() const = 0;
+    virtual const HeapStructureStats& structure_stats() const = 0;
 };
 
 std::unique_ptr<DijkstraQueue> make_queue_adapter(HeapSelection selection);
