@@ -9,6 +9,7 @@ BinaryHeap::~BinaryHeap() {
 BinaryHeapNode* BinaryHeap::insert(long long key, int value) {
     auto* node = new BinaryHeapNode{key, value, static_cast<int>(heap_.size())};
     heap_.push_back(node);
+    ++live_nodes_;
     heapify_up(node->index);
     update_size_metrics();
     return node;
@@ -28,6 +29,9 @@ std::pair<long long, int> BinaryHeap::extract_min() {
     }
 
     delete root;
+    if (live_nodes_ > 0) {
+        --live_nodes_;
+    }
     update_size_metrics();
     return result;
 }
@@ -114,6 +118,7 @@ std::size_t BinaryHeap::compute_height(std::size_t nodes) {
 
 void BinaryHeap::update_size_metrics() {
     stats_.current_nodes = heap_.size();
+    live_nodes_ = stats_.current_nodes;
     if (stats_.current_nodes > stats_.max_nodes) {
         stats_.max_nodes = stats_.current_nodes;
     }
@@ -124,5 +129,9 @@ void BinaryHeap::update_size_metrics() {
     const std::size_t roots = stats_.current_nodes > 0 ? 1u : 0u;
     if (roots > stats_.max_roots) {
         stats_.max_roots = roots;
+    }
+    stats_.current_bytes = live_nodes_ * sizeof(BinaryHeapNode) + heap_.capacity() * sizeof(BinaryHeapNode*);
+    if (stats_.current_bytes > stats_.max_bytes) {
+        stats_.max_bytes = stats_.current_bytes;
     }
 }

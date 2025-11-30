@@ -1,6 +1,13 @@
 === Batch Summary for Shanghai road network ===
 Heap           Runtime(ms)       Inserts   Insert Avg (us)      Extracts  Extract Avg (us)     Decreases   Decrease Avg (us)     Reachable
 ------------------------------------------------------------------------------------------------------------------------------------------
-Binary                 135        390171             0.046        390171             0.081         14261               0.028        390171
-Fibonacci              309        390171             0.040        390171             0.546         14256               0.033        390171
-Hollow                 172        342567             0.108        339873             0.165         12129               0.137        342567
+Binary                 141        390171             0.045        390171             0.084         14261               0.028        390171
+Fibonacci              329        390171             0.045        390171             0.575         14256               0.026        390171
+Hollow                 207        390171             0.108        390171             0.177         14248               0.074        390171
+
+=== Structural Metrics for Shanghai road network ===
+Heap            MaxNodes    MaxBytes       MaxMB    Height  MaxRoots    ConsolPasses     LinkOps
+------------------------------------------------------------------------------------------------
+Binary               662       16280       0.016        10         1          390036     2825257
+Fibonacci            662       42368       0.040        11        20          390166     2579158
+Hollow               663    25768720      24.575        10         1          390171     4403098

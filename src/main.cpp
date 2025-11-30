@@ -117,6 +117,90 @@ struct WorkloadStats {
     HeapStructureStats structure;
 };
 
+struct AggregateStats {
+    HeapSelection heap;
+    std::size_t runs = 0;
+    long long total_runtime_ms = 0;
+    long long max_runtime_ms = 0;
+    std::size_t total_reachable = 0;
+    std::size_t max_reachable = 0;
+    QueueMetrics total_metrics;
+    HeapStructureStats structure;
+};
+
+void accumulate_structure_stats(HeapStructureStats& dest, const HeapStructureStats& src) {
+    dest.max_nodes = std::max(dest.max_nodes, src.max_nodes);
+    dest.max_tree_height = std::max(dest.max_tree_height, src.max_tree_height);
+    dest.max_roots = std::max(dest.max_roots, src.max_roots);
+    dest.max_bytes = std::max(dest.max_bytes, src.max_bytes);
+    dest.consolidation_passes = std::max(dest.consolidation_passes, src.consolidation_passes);
+    dest.link_operations = std::max(dest.link_operations, src.link_operations);
+}
+
+void accumulate_metrics(QueueMetrics& dest, const QueueMetrics& src) {
+    dest.insert_count += src.insert_count;
+    dest.decrease_count += src.decrease_count;
+    dest.extract_count += src.extract_count;
+    dest.insert_time_ns += src.insert_time_ns;
+    dest.decrease_time_ns += src.decrease_time_ns;
+    dest.extract_time_ns += src.extract_time_ns;
+}
+
+void accumulate_aggregate(AggregateStats& agg, const RunSummary& summary) {
+    agg.runs++;
+    agg.total_runtime_ms += summary.elapsed_ms;
+    agg.max_runtime_ms = std::max(agg.max_runtime_ms, summary.elapsed_ms);
+    agg.total_reachable += summary.reachable_nodes;
+    agg.max_reachable = std::max(agg.max_reachable, summary.reachable_nodes);
+    accumulate_metrics(agg.total_metrics, summary.metrics);
+    accumulate_structure_stats(agg.structure, summary.structure);
+}
+
+std::string format_all_sources_table(const std::vector<AggregateStats>& aggregates,
+                                     const std::string& dataset_name,
+                                     std::size_t source_count) {
+    if (aggregates.empty()) {
+        return {};
+    }
+
+    std::ostringstream oss;
+    oss << "=== All-Sources Summary for " << dataset_name << " (" << source_count << " sources) ===\n";
+    oss << std::left << std::setw(12) << "Heap" << std::right
+        << std::setw(12) << "Runs"
+        << std::setw(16) << "AvgRuntime(ms)"
+        << std::setw(16) << "MaxRuntime(ms)"
+        << std::setw(16) << "TotalRuntime(s)"
+        << std::setw(16) << "AvgReachable"
+        << std::setw(18) << "Insert Avg (us)"
+        << std::setw(18) << "Extract Avg (us)"
+        << std::setw(18) << "Decrease Avg (us)" << '\n';
+    oss << std::string(150, '-') << '\n';
+    oss << std::fixed << std::setprecision(3);
+    for (const auto& agg : aggregates) {
+        if (agg.runs == 0) {
+            continue;
+        }
+        double avg_runtime_ms = static_cast<double>(agg.total_runtime_ms) / static_cast<double>(agg.runs);
+        double total_runtime_s = static_cast<double>(agg.total_runtime_ms) / 1000.0;
+        double avg_reachable = static_cast<double>(agg.total_reachable) / static_cast<double>(agg.runs);
+        double insert_avg = average_us(agg.total_metrics.insert_time_ns, agg.total_metrics.insert_count);
+        double extract_avg = average_us(agg.total_metrics.extract_time_ns, agg.total_metrics.extract_count);
+        double decrease_avg = average_us(agg.total_metrics.decrease_time_ns, agg.total_metrics.decrease_count);
+        oss << std::left << std::setw(12) << heap_name(agg.heap) << std::right
+            << std::setw(12) << agg.runs
+            << std::setw(16) << avg_runtime_ms
+            << std::setw(16) << agg.max_runtime_ms
+            << std::setw(16) << total_runtime_s
+            << std::setw(16) << avg_reachable
+            << std::setw(18) << insert_avg
+            << std::setw(18) << extract_avg
+            << std::setw(18) << decrease_avg
+            << '\n';
+    }
+    oss.unsetf(std::ios::floatfield);
+    return oss.str();
+}
+
 RunSummary execute_run(const Graph& graph, int source, HeapSelection selection, DijkstraResult* out_result) {
     auto queue = make_queue_adapter(selection);
     auto start = std::chrono::steady_clock::now();
@@ -173,6 +257,13 @@ std::filesystem::path default_workload_path(std::size_t operations) {
     return std::filesystem::path("Results") / oss.str();
 }
 
+std::filesystem::path default_all_sources_path(const DatasetOption& dataset, std::size_t start_source, std::size_t count) {
+    std::ostringstream oss;
+    oss << sanitize_filename_component(dataset.name) << "_all_sources_start" << start_source
+        << "_count" << count << ".txt";
+    return std::filesystem::path("Results") / oss.str();
+}
+
 std::filesystem::path detect_exe_directory(char** argv) {
     if (!argv || !argv[0]) {
         return std::filesystem::current_path();
@@ -221,6 +312,14 @@ std::filesystem::path resolve_dataset_path(const std::string& relative, const st
     return {};
 }
 
+std::string format_bytes_with_mb(std::size_t bytes) {
+    std::ostringstream oss;
+    oss << bytes << " (" << std::fixed << std::setprecision(2)
+        << (static_cast<double>(bytes) / (1024.0 * 1024.0)) << " MB)";
+    oss.unsetf(std::ios::floatfield);
+    return oss.str();
+}
+
 template <typename Collection, typename LabelAccessor>
 std::string format_structure_table(const Collection& items, const std::string& title, LabelAccessor label_accessor) {
     if (items.empty()) {
@@ -231,17 +330,24 @@ std::string format_structure_table(const Collection& items, const std::string& t
     oss << title << '\n';
     oss << std::left << std::setw(12) << "Heap" << std::right
         << std::setw(12) << "MaxNodes"
-        << std::setw(12) << "Height"
-        << std::setw(12) << "MaxRoots"
+        << std::setw(12) << "MaxBytes"
+        << std::setw(12) << "MaxMB"
+        << std::setw(10) << "Height"
+        << std::setw(10) << "MaxRoots"
         << std::setw(16) << "ConsolPasses"
         << std::setw(12) << "LinkOps" << '\n';
-    oss << std::string(76, '-') << '\n';
+    oss << std::string(96, '-') << '\n';
     for (const auto& item : items) {
         const auto& stats = item.structure;
+        const double max_mb = stats.max_bytes / (1024.0 * 1024.0);
         oss << std::left << std::setw(12) << label_accessor(item) << std::right
             << std::setw(12) << stats.max_nodes
-            << std::setw(12) << stats.max_tree_height
-            << std::setw(12) << stats.max_roots
+            << std::setw(12) << stats.max_bytes;
+        oss << std::setw(12) << std::fixed << std::setprecision(3) << max_mb;
+        oss.unsetf(std::ios::floatfield);
+        oss << std::setprecision(6);
+        oss << std::setw(10) << stats.max_tree_height
+            << std::setw(10) << stats.max_roots
             << std::setw(16) << stats.consolidation_passes
             << std::setw(12) << stats.link_operations
             << '\n';
@@ -251,6 +357,7 @@ std::string format_structure_table(const Collection& items, const std::string& t
 
 void print_structure_metrics(const HeapStructureStats& stats) {
     std::cout << "Max nodes      : " << stats.max_nodes << std::endl;
+    std::cout << "Max bytes      : " << format_bytes_with_mb(stats.max_bytes) << std::endl;
     std::cout << "Max tree height: " << stats.max_tree_height << std::endl;
     std::cout << "Max roots      : " << stats.max_roots << std::endl;
     std::cout << "Consolidations : " << stats.consolidation_passes << std::endl;
@@ -502,7 +609,6 @@ int main(int argc, char** argv) try {
         {"Shanghai road network", "Data/Shanghai.road-d"},
     };
 
-    std::cout << "=== Dijkstra Benchmark Driver ===\n";
     std::cout << "Available datasets:" << std::endl;
     for (std::size_t i = 0; i < datasets.size(); ++i) {
         std::cout << "  [" << (i + 1) << "] " << datasets[i].name << " (" << datasets[i].path << ")" << std::endl;
@@ -540,6 +646,7 @@ int main(int argc, char** argv) try {
     std::cout << "  [1] Single run (interactive)" << std::endl;
     std::cout << "  [2] Run all heaps and produce summary" << std::endl;
     std::cout << "  [3] Random PQ workload benchmark" << std::endl;
+    std::cout << "  [4] Run Dijkstra from every node" << std::endl;
     int mode_choice = read_int_with_default("Mode [default: 1]: ", 1);
 
     if (mode_choice == 2) {
@@ -604,6 +711,102 @@ int main(int argc, char** argv) try {
         std::filesystem::path out_path(out_path_input);
 
         std::string report = format_workload_table(workloads, op_count);
+        std::cout << '\n' << report << std::endl;
+        write_summary_report(report, out_path);
+        std::cout << "Summary written to " << out_path << std::endl;
+        return 0;
+    }
+
+    if (mode_choice == 4) {
+        std::size_t total_nodes = graph.node_count();
+        if (total_nodes == 0) {
+            std::cout << "Graph has no nodes to process." << std::endl;
+            return 0;
+        }
+
+        int start_input = read_int_with_default("Start source vertex id [default: 0]: ", 0);
+        if (start_input < 0) {
+            start_input = 0;
+        }
+        if (static_cast<std::size_t>(start_input) >= total_nodes) {
+            std::cout << "Start vertex exceeds graph size. Using last vertex instead." << std::endl;
+            start_input = static_cast<int>(total_nodes - 1);
+        }
+        std::size_t start_source = static_cast<std::size_t>(start_input);
+        std::size_t remaining = total_nodes - start_source;
+
+        int limit_input = read_int_with_default(
+            "How many sources to process? [0 = all remaining]: ", 0);
+        if (limit_input < 0) {
+            limit_input = 0;
+        }
+        std::size_t sources_to_run = remaining;
+        if (limit_input > 0) {
+            sources_to_run = std::min(remaining, static_cast<std::size_t>(limit_input));
+        }
+
+        if (sources_to_run == 0) {
+            std::cout << "No sources available to process from the chosen start vertex." << std::endl;
+            return 0;
+        }
+
+        bool run_all_heaps = prompt_yes_no("Run all heap implementations? [Y/n]: ", true);
+        std::cout << "Running Dijkstra from " << sources_to_run << " sources per heap (starting at vertex "
+                  << start_source << "). This may take a while." << std::endl;
+
+        std::vector<AggregateStats> aggregates;
+        auto run_for_selection = [&](HeapSelection selection) {
+            std::cout << "\n[" << heap_name(selection) << "] beginning all-sources pass..." << std::endl;
+            AggregateStats agg;
+            agg.heap = selection;
+            std::size_t progress_step = std::max<std::size_t>(1, sources_to_run / 10);
+            for (std::size_t offset = 0; offset < sources_to_run; ++offset) {
+                int source_vertex = static_cast<int>(start_source + offset);
+                RunSummary summary = execute_run(graph, source_vertex, selection, nullptr);
+                accumulate_aggregate(agg, summary);
+                if ((offset + 1) % progress_step == 0 || offset + 1 == sources_to_run) {
+                    std::cout << "  Completed " << (offset + 1) << "/" << sources_to_run
+                              << " sources\r" << std::flush;
+                }
+            }
+            std::cout << std::string(50, ' ') << "\r";
+            std::cout << "  Completed " << sources_to_run << " sources for " << heap_name(selection) << "."
+                      << std::endl;
+            aggregates.push_back(agg);
+        };
+
+        if (run_all_heaps) {
+            for (HeapSelection selection : {HeapSelection::kBinary, HeapSelection::kFibonacci, HeapSelection::kHollow}) {
+                run_for_selection(selection);
+            }
+        } else {
+            std::cout << "Select heap implementation:" << std::endl;
+            std::cout << "  [1] Binary Heap" << std::endl;
+            std::cout << "  [2] Fibonacci Heap" << std::endl;
+            std::cout << "  [3] Hollow Heap" << std::endl;
+            int heap_choice = read_int_with_default("Choice [default: 3]: ", 3);
+            if (heap_choice < 1 || heap_choice > 3) {
+                std::cout << "Invalid selection. Using Hollow Heap." << std::endl;
+                heap_choice = 3;
+            }
+            run_for_selection(static_cast<HeapSelection>(heap_choice));
+        }
+
+        auto default_path = default_all_sources_path(dataset, start_source, sources_to_run);
+        std::string out_path_input = read_line_with_default(
+            "Enter all-sources summary file path [default: " + default_path.string() + "]: ",
+            default_path.string());
+        std::filesystem::path out_path(out_path_input);
+
+        std::string report = format_all_sources_table(aggregates, dataset.name, sources_to_run);
+        std::string structure_section = format_structure_table(
+            aggregates,
+            "=== Structural Peaks for " + dataset.name + " (all-sources) ===",
+            [](const AggregateStats& agg) { return heap_name(agg.heap); });
+        if (!structure_section.empty()) {
+            report += '\n' + structure_section;
+        }
+
         std::cout << '\n' << report << std::endl;
         write_summary_report(report, out_path);
         std::cout << "Summary written to " << out_path << std::endl;

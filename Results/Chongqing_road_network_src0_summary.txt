@@ -1,6 +1,13 @@
 === Batch Summary for Chongqing road network ===
 Heap           Runtime(ms)       Inserts   Insert Avg (us)      Extracts  Extract Avg (us)     Decreases   Decrease Avg (us)     Reachable
 ------------------------------------------------------------------------------------------------------------------------------------------
-Binary                 548       1185464             0.056       1185464             0.080          9921               0.034       1185464
-Fibonacci              999       1185464             0.042       1185464             0.529          9927               0.034       1185464
-Hollow                 611       1171083             0.117       1169597             0.140          9494               0.122       1171083
+Binary                 425       1185464             0.043       1185464             0.075          9921               0.026       1185464
+Fibonacci              922       1185464             0.043       1185464             0.517          9927               0.027       1185464
+Hollow                 562       1185464             0.108       1185464             0.135          9935               0.079       1185464
+
+=== Structural Metrics for Chongqing road network ===
+Heap            MaxNodes    MaxBytes       MaxMB    Height  MaxRoots    ConsolPasses     LinkOps
+------------------------------------------------------------------------------------------------
+Binary               499       13672       0.013         9         1         1185372     7308290
+Fibonacci            499       31936       0.030        11        19         1185449     6689216
+Hollow               498    76426056      72.886         9         1         1185464    11657073

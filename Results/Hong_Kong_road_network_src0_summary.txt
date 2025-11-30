@@ -1,0 +1,13 @@
+=== Batch Summary for Hong Kong road network ===
+Heap           Runtime(ms)       Inserts   Insert Avg (us)      Extracts  Extract Avg (us)     Decreases   Decrease Avg (us)     Reachable
+------------------------------------------------------------------------------------------------------------------------------------------
+Binary                  15         43620             0.061         43620             0.088           605               0.034         43620
+Fibonacci               29         43620             0.047         43620             0.455           601               0.025         43620
+Hollow                  19         43620             0.107         43620             0.123           602               0.116         43620
+
+=== Structural Metrics for Hong Kong road network ===
+Heap            MaxNodes    MaxBytes       MaxMB    Height  MaxRoots    ConsolPasses     LinkOps
+------------------------------------------------------------------------------------------------
+Binary               100        2728       0.003         7         1           43564      213704
+Fibonacci             98        6272       0.006         8        14           43612      185072
+Hollow                99     2825392       2.695         7         1           43620      329612

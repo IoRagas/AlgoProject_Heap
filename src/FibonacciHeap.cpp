@@ -323,6 +323,10 @@ void FibonacciHeap::update_size_metrics() {
     if (root_count_ > stats_.max_roots) {
         stats_.max_roots = root_count_;
     }
+    stats_.current_bytes = stats_.current_nodes * sizeof(FibonacciHeapNode);
+    if (stats_.current_bytes > stats_.max_bytes) {
+        stats_.max_bytes = stats_.current_bytes;
+    }
 }
 
 void FibonacciHeap::note_tree_height(int subtree_height) {

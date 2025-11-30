@@ -120,6 +120,7 @@ void HollowHeap::decrease_key(HollowHeapNode* handle, long long new_key) {
 
     if (!root_) {
         root_ = new_cell;
+        update_size_metrics();
         return;
     }
 
@@ -129,6 +130,7 @@ void HollowHeap::decrease_key(HollowHeapNode* handle, long long new_key) {
         new_cell->child = node;
         node->second_parent = new_cell;
     }
+    update_size_metrics();
 }
 
 std::pair<long long, int> HollowHeap::extract_min() {
@@ -180,7 +182,7 @@ std::pair<long long, int> HollowHeap::extract_min() {
                 } else {
                     if (cur->second_parent == parent) {
                         cur->second_parent = nullptr;
-                        break;
+                        to_delete_.push_back(cur);
                     } else {
                         cur->second_parent = nullptr;
                         cur->next = nullptr;
@@ -265,6 +267,12 @@ void HollowHeap::update_size_metrics() {
     const std::size_t roots = root_ ? 1u : 0u;
     if (roots > stats_.max_roots) {
         stats_.max_roots = roots;
+    }
+    const std::size_t handle_bytes = handles_.size() * sizeof(HollowHeapNode);
+    const std::size_t cell_bytes = cells_.size() * sizeof(HollowHeapCell);
+    stats_.current_bytes = handle_bytes + cell_bytes;
+    if (stats_.current_bytes > stats_.max_bytes) {
+        stats_.max_bytes = stats_.current_bytes;
     }
 }
 

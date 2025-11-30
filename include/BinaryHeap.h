@@ -30,6 +30,7 @@ public:
 private:
     std::vector<BinaryHeapNode*> heap_; // binary heap storing pointers to nodes
     HeapStructureStats stats_{};
+    std::size_t live_nodes_ = 0;
 
     static int parent(int i) { return (i - 1) / 2; }
     static int left(int i) { return 2 * i + 1; }
