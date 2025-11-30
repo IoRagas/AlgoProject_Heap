@@ -16,6 +16,8 @@ set(SOURCES
     src/BinaryHeap.cpp
     src/FibonacciHeap.cpp
     src/HollowHeap.cpp
+    src/Graph.cpp
+    src/Dijkstra.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

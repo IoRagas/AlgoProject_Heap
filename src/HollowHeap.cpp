@@ -27,7 +27,7 @@ HollowHeap::HollowHeap()
 HollowHeap::~HollowHeap() = default;
 
 bool HollowHeap::is_empty() const {
-    return active_size_ == 0;
+    return root_ == nullptr;
 }
 
 HollowHeapNode* HollowHeap::make_handle() {
