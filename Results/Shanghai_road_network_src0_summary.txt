@@ -1,0 +1,6 @@
+=== Batch Summary for Shanghai road network ===
+Heap           Runtime(ms)       Inserts   Insert Avg (us)      Extracts  Extract Avg (us)     Decreases   Decrease Avg (us)     Reachable
+------------------------------------------------------------------------------------------------------------------------------------------
+Binary                 135        390171             0.046        390171             0.081         14261               0.028        390171
+Fibonacci              309        390171             0.040        390171             0.546         14256               0.033        390171
+Hollow                 172        342567             0.108        339873             0.165         12129               0.137        342567

@@ -1,0 +1,6 @@
+=== Random PQ Workload Summary (100000 ops) ===
+Heap           Runtime(ms)       Inserts   Insert Avg (us)      Extracts  Extract Avg (us)     Decreases   Decrease Avg (us)
+--------------------------------------------------------------------------------------------------------------------------------
+Binary                  12         40159             0.086         25107             0.088         34734               0.060
+Fibonacci               24         40367             0.049         25130             0.574         34503               0.049
+Hollow                  24         39928             0.108         25063             0.168         35009               0.183

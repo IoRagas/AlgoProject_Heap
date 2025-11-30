@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -10,9 +12,13 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <random>
 
+#include "BinaryHeap.h"
 #include "Dijkstra.h"
+#include "FibonacciHeap.h"
 #include "Graph.h"
+#include "HollowHeap.h"
 
 namespace {
 struct DatasetOption {
@@ -21,6 +27,7 @@ struct DatasetOption {
 };
 
 constexpr long long kInfinity = std::numeric_limits<long long>::max() / 4;
+
 
 int read_int_with_default(const std::string& prompt, int default_value) {
     std::cout << prompt;
@@ -45,6 +52,18 @@ std::string read_line_with_default(const std::string& prompt, const std::string&
         return default_value;
     }
     return line;
+}
+
+bool prompt_yes_no(const std::string& prompt, bool default_value) {
+    std::cout << prompt;
+    std::string line;
+    if (!std::getline(std::cin, line) || line.empty()) {
+        return default_value;
+    }
+    char c = static_cast<char>(std::tolower(static_cast<unsigned char>(line[0])));
+    if (c == 'y' || c == '1') return true;
+    if (c == 'n' || c == '0') return false;
+    return default_value;
 }
 
 void print_distance_sample(const std::vector<long long>& distances, int sample_count) {
@@ -83,6 +102,13 @@ struct RunSummary {
     int farthest_node = -1;
     long long farthest_distance = 0;
     QueueMetrics metrics;
+};
+
+struct WorkloadStats {
+    HeapSelection heap;
+    std::size_t operations = 0;
+    QueueMetrics metrics;
+    long long total_runtime_ms = 0;
 };
 
 RunSummary execute_run(const Graph& graph, int source, HeapSelection selection, DijkstraResult* out_result) {
@@ -134,6 +160,60 @@ std::filesystem::path default_summary_path(const DatasetOption& dataset, int sou
     return std::filesystem::path("Results") / oss.str();
 }
 
+std::filesystem::path default_workload_path(std::size_t operations) {
+    std::ostringstream oss;
+    oss << "RandomPQ_ops" << operations << "_summary.txt";
+    return std::filesystem::path("Results") / oss.str();
+}
+
+std::filesystem::path detect_exe_directory(char** argv) {
+    if (!argv || !argv[0]) {
+        return std::filesystem::current_path();
+    }
+    std::error_code ec;
+    auto exe_path = std::filesystem::canonical(argv[0], ec);
+    if (ec) {
+        return std::filesystem::current_path();
+    }
+    return exe_path.parent_path();
+}
+
+std::filesystem::path resolve_dataset_path(const std::string& relative, const std::filesystem::path& exe_dir) {
+    std::filesystem::path rel_path(relative);
+    if (rel_path.is_absolute()) {
+        std::error_code ec;
+        if (std::filesystem::exists(rel_path, ec)) {
+            return rel_path;
+        }
+        return {};
+    }
+
+    std::vector<std::filesystem::path> bases;
+    bases.emplace_back(); // current relative path
+    bases.push_back(std::filesystem::current_path());
+    bases.push_back(exe_dir);
+    auto parent = exe_dir;
+    for (int i = 0; i < 4 && !parent.empty(); ++i) {
+        parent = parent.parent_path();
+        if (!parent.empty()) {
+            bases.push_back(parent);
+        }
+    }
+
+    for (const auto& base : bases) {
+        std::filesystem::path candidate = base.empty() ? rel_path : (base / rel_path);
+        std::error_code ec;
+        if (candidate.empty()) {
+            continue;
+        }
+        if (std::filesystem::exists(candidate, ec)) {
+            auto resolved = std::filesystem::canonical(candidate, ec);
+            return ec ? candidate : resolved;
+        }
+    }
+    return {};
+}
+
 std::string format_summary_table(const std::vector<RunSummary>& runs, const std::string& dataset_name) {
     std::ostringstream oss;
     oss << "=== Batch Summary for " << dataset_name << " ===\n";
@@ -183,9 +263,179 @@ void write_summary_report(const std::string& report, const std::filesystem::path
         }
     }
 }
+
+std::string format_workload_table(const std::vector<WorkloadStats>& workloads, std::size_t operations) {
+    std::ostringstream oss;
+    oss << "=== Random PQ Workload Summary (" << operations << " ops) ===\n";
+    oss << std::left << std::setw(12) << "Heap" << std::right
+        << std::setw(14) << "Runtime(ms)"
+        << std::setw(14) << "Inserts"
+        << std::setw(18) << "Insert Avg (us)"
+        << std::setw(14) << "Extracts"
+        << std::setw(18) << "Extract Avg (us)"
+        << std::setw(14) << "Decreases"
+        << std::setw(20) << "Decrease Avg (us)"
+        << '\n';
+    oss << std::string(128, '-') << '\n';
+    oss << std::fixed << std::setprecision(3);
+    for (const auto& run : workloads) {
+        double insert_avg = average_us(run.metrics.insert_time_ns, run.metrics.insert_count);
+        double extract_avg = average_us(run.metrics.extract_time_ns, run.metrics.extract_count);
+        double decrease_avg = average_us(run.metrics.decrease_time_ns, run.metrics.decrease_count);
+        oss << std::left << std::setw(12) << heap_name(run.heap) << std::right
+            << std::setw(14) << run.total_runtime_ms
+            << std::setw(14) << run.metrics.insert_count
+            << std::setw(18) << insert_avg
+            << std::setw(14) << run.metrics.extract_count
+            << std::setw(18) << extract_avg
+            << std::setw(14) << run.metrics.decrease_count
+            << std::setw(20) << decrease_avg
+            << '\n';
+    }
+    oss.unsetf(std::ios::floatfield);
+    return oss.str();
+}
+
+template <typename HeapType, typename HandleType>
+WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
+    using Clock = std::chrono::steady_clock;
+    std::mt19937 rng(seed);
+    HeapType heap;
+    QueueMetrics metrics;
+
+    std::vector<HandleType*> handle_by_value;
+    std::vector<long long> key_by_value;
+    std::vector<int> active_ids;
+    std::vector<int> active_pos;
+    int next_value = 0;
+
+    auto ensure_capacity = [&](int value) {
+        if (value >= static_cast<int>(handle_by_value.size())) {
+            handle_by_value.resize(value + 1, nullptr);
+            key_by_value.resize(value + 1, 0);
+            active_pos.resize(value + 1, -1);
+        }
+    };
+
+    std::uniform_int_distribution<int> op_dist(0, 99);
+    std::uniform_int_distribution<long long> key_dist(1'000, 10'000'000);
+    auto total_start = Clock::now();
+
+    for (std::size_t i = 0; i < operations; ++i) {
+        int choice = op_dist(rng);
+        bool force_insert = heap.is_empty();
+
+        if (force_insert || choice < 40) {
+            long long key = key_dist(rng);
+            int value = next_value++;
+            ensure_capacity(value);
+            auto op_start = Clock::now();
+            HandleType* handle = heap.insert(key, value);
+            auto op_end = Clock::now();
+            metrics.insert_count++;
+            metrics.insert_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
+
+            handle_by_value[value] = handle;
+            key_by_value[value] = key;
+            active_pos[value] = static_cast<int>(active_ids.size());
+            active_ids.push_back(value);
+            continue;
+        }
+
+        bool can_decrease = !active_ids.empty();
+        if (can_decrease && choice < 75) {
+            std::uniform_int_distribution<std::size_t> idx_dist(0, active_ids.size() - 1);
+            int value = active_ids[idx_dist(rng)];
+            HandleType* handle = handle_by_value[value];
+            if (!handle) {
+                continue;
+            }
+            long long delta = 1 + static_cast<long long>(rng() % 1000);
+            long long new_key = key_by_value[value];
+            new_key = new_key > delta ? new_key - delta : 0;
+            auto op_start = Clock::now();
+            heap.decrease_key(handle, new_key);
+            auto op_end = Clock::now();
+            metrics.decrease_count++;
+            metrics.decrease_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
+            key_by_value[value] = new_key;
+            continue;
+        }
+
+        if (heap.is_empty()) {
+            // fallback insert
+            long long key = key_dist(rng);
+            int value = next_value++;
+            ensure_capacity(value);
+            auto op_start = Clock::now();
+            HandleType* handle = heap.insert(key, value);
+            auto op_end = Clock::now();
+            metrics.insert_count++;
+            metrics.insert_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
+
+            handle_by_value[value] = handle;
+            key_by_value[value] = key;
+            active_pos[value] = static_cast<int>(active_ids.size());
+            active_ids.push_back(value);
+            continue;
+        }
+
+        auto op_start = Clock::now();
+        auto result = heap.extract_min();
+        auto op_end = Clock::now();
+        metrics.extract_count++;
+        metrics.extract_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
+
+        int value = result.second;
+        if (value >= 0 && value < static_cast<int>(handle_by_value.size())) {
+            handle_by_value[value] = nullptr;
+            if (value < static_cast<int>(active_pos.size())) {
+                int pos = active_pos[value];
+                if (pos >= 0) {
+                    int last_value = active_ids.back();
+                    active_ids[pos] = last_value;
+                    active_pos[last_value] = pos;
+                    active_ids.pop_back();
+                }
+                active_pos[value] = -1;
+            }
+        }
+    }
+
+    auto total_end = Clock::now();
+
+    WorkloadStats stats;
+    stats.operations = operations;
+    stats.metrics = metrics;
+    stats.total_runtime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(total_end - total_start).count();
+    return stats;
+}
+
+WorkloadStats run_random_workload(std::size_t operations, HeapSelection selection, std::uint32_t seed) {
+    switch (selection) {
+        case HeapSelection::kBinary: {
+            auto stats = run_workload_impl<BinaryHeap, BinaryHeapNode>(operations, seed);
+            stats.heap = selection;
+            return stats;
+        }
+        case HeapSelection::kFibonacci: {
+            auto stats = run_workload_impl<FibonacciHeap, FibonacciHeapNode>(operations, seed);
+            stats.heap = selection;
+            return stats;
+        }
+        case HeapSelection::kHollow: {
+            auto stats = run_workload_impl<HollowHeap, HollowHeapNode>(operations, seed);
+            stats.heap = selection;
+            return stats;
+        }
+        default:
+            throw std::invalid_argument("Unknown heap selection");
+    }
+}
 } // namespace
 
-int main() try {
+int main(int argc, char** argv) try {
+    const std::filesystem::path exe_dir = detect_exe_directory(argv);
     const std::vector<DatasetOption> datasets = {
         {"Chongqing road network", "Data/Chongqing.road-d"},
         {"Hong Kong road network", "Data/Hongkong.road-d"},
@@ -208,7 +458,12 @@ int main() try {
     std::string load_error;
     const auto& dataset = datasets[static_cast<std::size_t>(dataset_choice - 1)];
     std::cout << "Loading " << dataset.name << "..." << std::endl;
-    if (!graph.load_from_file(dataset.path, &load_error)) {
+    const auto dataset_path = resolve_dataset_path(dataset.path, exe_dir);
+    if (dataset_path.empty()) {
+        std::cerr << "Failed to locate dataset file: " << dataset.path << std::endl;
+        return 1;
+    }
+    if (!graph.load_from_file(dataset_path.string(), &load_error)) {
         std::cerr << "Failed to load dataset: " << load_error << std::endl;
         return 1;
     }
@@ -224,6 +479,7 @@ int main() try {
     std::cout << "Select run mode:" << std::endl;
     std::cout << "  [1] Single run (interactive)" << std::endl;
     std::cout << "  [2] Run all heaps and produce summary" << std::endl;
+    std::cout << "  [3] Random PQ workload benchmark" << std::endl;
     int mode_choice = read_int_with_default("Mode [default: 1]: ", 1);
 
     if (mode_choice == 2) {
@@ -242,6 +498,52 @@ int main() try {
         std::filesystem::path out_path(out_path_input);
 
         std::string report = format_summary_table(summaries, dataset.name);
+        std::cout << '\n' << report << std::endl;
+        write_summary_report(report, out_path);
+        std::cout << "Summary written to " << out_path << std::endl;
+        return 0;
+    }
+
+    if (mode_choice == 3) {
+        std::size_t op_count = static_cast<std::size_t>(std::max(1, read_int_with_default(
+            "Total operations [default: 100000]: ", 100000)));
+        bool run_all = prompt_yes_no("Benchmark all heaps? [Y/n]: ", true);
+
+        std::vector<WorkloadStats> workloads;
+        std::random_device rd;
+        std::uint32_t seed = rd();
+
+        auto run_for_selection = [&](HeapSelection selection) {
+            std::cout << "Running " << heap_name(selection) << " workload..." << std::flush;
+            WorkloadStats stats = run_random_workload(op_count, selection, seed++);
+            std::cout << " done (" << stats.total_runtime_ms << " ms)." << std::endl;
+            workloads.push_back(stats);
+        };
+
+        if (run_all) {
+            for (HeapSelection selection : {HeapSelection::kBinary, HeapSelection::kFibonacci, HeapSelection::kHollow}) {
+                run_for_selection(selection);
+            }
+        } else {
+            std::cout << "Select heap implementation:" << std::endl;
+            std::cout << "  [1] Binary Heap" << std::endl;
+            std::cout << "  [2] Fibonacci Heap" << std::endl;
+            std::cout << "  [3] Hollow Heap" << std::endl;
+            int heap_choice = read_int_with_default("Choice [default: 3]: ", 3);
+            if (heap_choice < 1 || heap_choice > 3) {
+                std::cout << "Invalid selection. Using Hollow Heap." << std::endl;
+                heap_choice = 3;
+            }
+            run_for_selection(static_cast<HeapSelection>(heap_choice));
+        }
+
+        auto default_path = default_workload_path(op_count);
+        std::string out_path_input = read_line_with_default(
+            "Enter workload summary file path [default: " + default_path.string() + "]: ",
+            default_path.string());
+        std::filesystem::path out_path(out_path_input);
+
+        std::string report = format_workload_table(workloads, op_count);
         std::cout << '\n' << report << std::endl;
         write_summary_report(report, out_path);
         std::cout << "Summary written to " << out_path << std::endl;
