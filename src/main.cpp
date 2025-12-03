@@ -28,6 +28,18 @@ struct DatasetOption {
 
 constexpr long long kInfinity = std::numeric_limits<long long>::max() / 4;
 
+void print_section_header(const std::string& title) {
+    std::cout << "\n" << std::string(80, '=') << "\n";
+    std::cout << "» " << title << "\n";
+    std::cout << std::string(80, '=') << std::endl;
+}
+
+void print_subsection_header(const std::string& title) {
+    std::cout << "\n" << std::string(60, '-') << "\n";
+    std::cout << title << "\n";
+    std::cout << std::string(60, '-') << std::endl;
+}
+
 
 int read_int_with_default(const std::string& prompt, int default_value) {
     std::cout << prompt;
@@ -115,6 +127,19 @@ struct WorkloadStats {
     QueueMetrics metrics;
     long long total_runtime_ms = 0;
     HeapStructureStats structure;
+};
+
+struct WorkloadMix {
+    int insert_pct = 40;
+    int decrease_pct = 35;
+    int extract_pct = 25;
+
+    bool valid() const {
+        if (insert_pct < 0 || decrease_pct < 0 || extract_pct < 0) {
+            return false;
+        }
+        return insert_pct + decrease_pct + extract_pct == 100;
+    }
 };
 
 struct AggregateStats {
@@ -422,9 +447,11 @@ void write_summary_report(const std::string& report, const std::filesystem::path
     }
 }
 
-std::string format_workload_table(const std::vector<WorkloadStats>& workloads, std::size_t operations) {
+std::string format_workload_table(const std::vector<WorkloadStats>& workloads, std::size_t operations, const WorkloadMix& mix) {
     std::ostringstream oss;
     oss << "=== Random PQ Workload Summary (" << operations << " ops) ===\n";
+    oss << "Mix: Insert " << mix.insert_pct << "% | Decrease " << mix.decrease_pct
+        << "% | Extract " << mix.extract_pct << "%\n";
     oss << std::left << std::setw(12) << "Heap" << std::right
         << std::setw(14) << "Runtime(ms)"
         << std::setw(14) << "Inserts"
@@ -463,7 +490,7 @@ std::string format_workload_table(const std::vector<WorkloadStats>& workloads, s
 }
 
 template <typename HeapType, typename HandleType>
-WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
+WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed, const WorkloadMix& mix) {
     using Clock = std::chrono::steady_clock;
     std::mt19937 rng(seed);
     HeapType heap;
@@ -483,6 +510,8 @@ WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
         }
     };
 
+    const int insert_threshold = mix.insert_pct;
+    const int decrease_threshold = insert_threshold + mix.decrease_pct;
     std::uniform_int_distribution<int> op_dist(0, 99);
     std::uniform_int_distribution<long long> key_dist(1'000, 10'000'000);
     auto total_start = Clock::now();
@@ -490,8 +519,26 @@ WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
     for (std::size_t i = 0; i < operations; ++i) {
         int choice = op_dist(rng);
         bool force_insert = heap.is_empty();
+        bool can_decrease = !active_ids.empty();
+        bool can_extract = !heap.is_empty() && (metrics.extract_count < metrics.insert_count);
 
-        if (force_insert || choice < 40) {
+        enum class PlannedOp { Insert, Decrease, Extract };
+        PlannedOp planned = PlannedOp::Extract;
+        if (choice < insert_threshold) {
+            planned = PlannedOp::Insert;
+        } else if (choice < decrease_threshold) {
+            planned = PlannedOp::Decrease;
+        }
+
+        if (force_insert) {
+            planned = PlannedOp::Insert;
+        } else if (planned == PlannedOp::Decrease && !can_decrease) {
+            planned = can_extract ? PlannedOp::Extract : PlannedOp::Insert;
+        } else if (planned == PlannedOp::Extract && !can_extract) {
+            planned = can_decrease ? PlannedOp::Decrease : PlannedOp::Insert;
+        }
+
+        if (planned == PlannedOp::Insert) {
             long long key = key_dist(rng);
             int value = next_value++;
             ensure_capacity(value);
@@ -505,11 +552,7 @@ WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
             key_by_value[value] = key;
             active_pos[value] = static_cast<int>(active_ids.size());
             active_ids.push_back(value);
-            continue;
-        }
-
-        bool can_decrease = !active_ids.empty();
-        if (can_decrease && choice < 75) {
+        } else if (planned == PlannedOp::Decrease) {
             std::uniform_int_distribution<std::size_t> idx_dist(0, active_ids.size() - 1);
             int value = active_ids[idx_dist(rng)];
             HandleType* handle = handle_by_value[value];
@@ -525,45 +568,26 @@ WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
             metrics.decrease_count++;
             metrics.decrease_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
             key_by_value[value] = new_key;
-            continue;
-        }
-
-        if (heap.is_empty()) {
-            // fallback insert
-            long long key = key_dist(rng);
-            int value = next_value++;
-            ensure_capacity(value);
+        } else { // Extract
             auto op_start = Clock::now();
-            HandleType* handle = heap.insert(key, value);
+            auto result = heap.extract_min();
             auto op_end = Clock::now();
-            metrics.insert_count++;
-            metrics.insert_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
+            metrics.extract_count++;
+            metrics.extract_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
 
-            handle_by_value[value] = handle;
-            key_by_value[value] = key;
-            active_pos[value] = static_cast<int>(active_ids.size());
-            active_ids.push_back(value);
-            continue;
-        }
-
-        auto op_start = Clock::now();
-        auto result = heap.extract_min();
-        auto op_end = Clock::now();
-        metrics.extract_count++;
-        metrics.extract_time_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(op_end - op_start).count();
-
-        int value = result.second;
-        if (value >= 0 && value < static_cast<int>(handle_by_value.size())) {
-            handle_by_value[value] = nullptr;
-            if (value < static_cast<int>(active_pos.size())) {
-                int pos = active_pos[value];
-                if (pos >= 0) {
-                    int last_value = active_ids.back();
-                    active_ids[pos] = last_value;
-                    active_pos[last_value] = pos;
-                    active_ids.pop_back();
+            int value = result.second;
+            if (value >= 0 && value < static_cast<int>(handle_by_value.size())) {
+                handle_by_value[value] = nullptr;
+                if (value < static_cast<int>(active_pos.size())) {
+                    int pos = active_pos[value];
+                    if (pos >= 0) {
+                        int last_value = active_ids.back();
+                        active_ids[pos] = last_value;
+                        active_pos[last_value] = pos;
+                        active_ids.pop_back();
+                    }
+                    active_pos[value] = -1;
                 }
-                active_pos[value] = -1;
             }
         }
     }
@@ -578,20 +602,20 @@ WorkloadStats run_workload_impl(std::size_t operations, std::uint32_t seed) {
     return stats;
 }
 
-WorkloadStats run_random_workload(std::size_t operations, HeapSelection selection, std::uint32_t seed) {
+WorkloadStats run_random_workload(std::size_t operations, HeapSelection selection, std::uint32_t seed, const WorkloadMix& mix) {
     switch (selection) {
         case HeapSelection::kBinary: {
-            auto stats = run_workload_impl<BinaryHeap, BinaryHeapNode>(operations, seed);
+            auto stats = run_workload_impl<BinaryHeap, BinaryHeapNode>(operations, seed, mix);
             stats.heap = selection;
             return stats;
         }
         case HeapSelection::kFibonacci: {
-            auto stats = run_workload_impl<FibonacciHeap, FibonacciHeapNode>(operations, seed);
+            auto stats = run_workload_impl<FibonacciHeap, FibonacciHeapNode>(operations, seed, mix);
             stats.heap = selection;
             return stats;
         }
         case HeapSelection::kHollow: {
-            auto stats = run_workload_impl<HollowHeap, HollowHeapNode>(operations, seed);
+            auto stats = run_workload_impl<HollowHeap, HollowHeapNode>(operations, seed, mix);
             stats.heap = selection;
             return stats;
         }
@@ -609,6 +633,7 @@ int main(int argc, char** argv) try {
         {"Shanghai road network", "Data/Shanghai.road-d"},
     };
 
+    print_section_header("Dataset Selection");
     std::cout << "Available datasets:" << std::endl;
     for (std::size_t i = 0; i < datasets.size(); ++i) {
         std::cout << "  [" << (i + 1) << "] " << datasets[i].name << " (" << datasets[i].path << ")" << std::endl;
@@ -623,7 +648,7 @@ int main(int argc, char** argv) try {
     Graph graph;
     std::string load_error;
     const auto& dataset = datasets[static_cast<std::size_t>(dataset_choice - 1)];
-    std::cout << "Loading " << dataset.name << "..." << std::endl;
+    std::cout << "\nLoading " << dataset.name << "..." << std::endl;
     const auto dataset_path = resolve_dataset_path(dataset.path, exe_dir);
     if (dataset_path.empty()) {
         std::cerr << "Failed to locate dataset file: " << dataset.path << std::endl;
@@ -634,7 +659,11 @@ int main(int argc, char** argv) try {
         return 1;
     }
 
-    std::cout << "Loaded graph with " << graph.node_count() << " nodes and " << graph.edge_count() << " edges." << std::endl;
+    print_subsection_header("Graph Loaded");
+    std::cout << "Dataset   : " << dataset.name << "\n";
+    std::cout << "File      : " << dataset_path << "\n";
+    std::cout << "Nodes     : " << graph.node_count() << "\n";
+    std::cout << "Edges     : " << graph.edge_count() << std::endl;
 
     int source = read_int_with_default("Enter source vertex id [default: 0]: ", 0);
     if (source < 0 || static_cast<std::size_t>(source) >= graph.node_count()) {
@@ -642,6 +671,7 @@ int main(int argc, char** argv) try {
         source = 0;
     }
 
+    print_section_header("Run Mode Selection");
     std::cout << "Select run mode:" << std::endl;
     std::cout << "  [1] Single run (interactive)" << std::endl;
     std::cout << "  [2] Run all heaps and produce summary" << std::endl;
@@ -650,9 +680,10 @@ int main(int argc, char** argv) try {
     int mode_choice = read_int_with_default("Mode [default: 1]: ", 1);
 
     if (mode_choice == 2) {
+        print_section_header("Batch Comparison (All Heaps)");
         std::vector<RunSummary> summaries;
         for (HeapSelection selection : {HeapSelection::kBinary, HeapSelection::kFibonacci, HeapSelection::kHollow}) {
-            std::cout << "Running " << heap_name(selection) << " heap..." << std::flush;
+            std::cout << "  • Running " << heap_name(selection) << " heap..." << std::flush;
             RunSummary summary = execute_run(graph, source, selection, nullptr);
             std::cout << " done (" << summary.elapsed_ms << " ms)." << std::endl;
             summaries.push_back(summary);
@@ -672,20 +703,43 @@ int main(int argc, char** argv) try {
     }
 
     if (mode_choice == 3) {
-        std::size_t op_count = static_cast<std::size_t>(std::max(1, read_int_with_default(
-            "Total operations [default: 100000]: ", 100000)));
+        print_section_header("Random Priority-Queue Workload");
+        int requested_ops = read_int_with_default("Total operations [default: 100000, max: 200000]: ", 100000);
+        if (requested_ops < 1) {
+            requested_ops = 1;
+        }
+        if (requested_ops > 200000) {
+            std::cout << "Requested operations exceed limit; capping at 200000." << std::endl;
+            requested_ops = 200000;
+        }
+        std::size_t op_count = static_cast<std::size_t>(requested_ops);
+
+        WorkloadMix mix;
+        mix.insert_pct = read_int_with_default("Insert percentage [default: 40]: ", 40);
+        mix.decrease_pct = read_int_with_default("Decrease-key percentage [default: 35]: ", 35);
+        mix.extract_pct = read_int_with_default("Extract-min percentage [default: 25]: ", 25);
+        if (!mix.valid()) {
+            std::cout << "Invalid mix; falling back to 40/35/25." << std::endl;
+            mix = WorkloadMix{};
+        }
+
         bool run_all = prompt_yes_no("Benchmark all heaps? [Y/n]: ", true);
 
         std::vector<WorkloadStats> workloads;
         std::random_device rd;
-        std::uint32_t seed = rd();
+        const std::uint32_t seed = rd();
 
         auto run_for_selection = [&](HeapSelection selection) {
-            std::cout << "Running " << heap_name(selection) << " workload..." << std::flush;
-            WorkloadStats stats = run_random_workload(op_count, selection, seed++);
+            std::cout << "  • Running " << heap_name(selection) << " workload..." << std::flush;
+            WorkloadStats stats = run_random_workload(op_count, selection, seed, mix);
             std::cout << " done (" << stats.total_runtime_ms << " ms)." << std::endl;
             workloads.push_back(stats);
         };
+
+        print_subsection_header("Configuration");
+        std::cout << "Operations : " << op_count << "\n";
+        std::cout << "Mix        : insert " << mix.insert_pct << "%, decrease "
+              << mix.decrease_pct << "%, extract " << mix.extract_pct << "%" << std::endl;
 
         if (run_all) {
             for (HeapSelection selection : {HeapSelection::kBinary, HeapSelection::kFibonacci, HeapSelection::kHollow}) {
@@ -710,7 +764,7 @@ int main(int argc, char** argv) try {
             default_path.string());
         std::filesystem::path out_path(out_path_input);
 
-        std::string report = format_workload_table(workloads, op_count);
+        std::string report = format_workload_table(workloads, op_count, mix);
         std::cout << '\n' << report << std::endl;
         write_summary_report(report, out_path);
         std::cout << "Summary written to " << out_path << std::endl;
@@ -718,6 +772,7 @@ int main(int argc, char** argv) try {
     }
 
     if (mode_choice == 4) {
+        print_section_header("All-Sources Sweep");
         std::size_t total_nodes = graph.node_count();
         if (total_nodes == 0) {
             std::cout << "Graph has no nodes to process." << std::endl;
@@ -752,11 +807,12 @@ int main(int argc, char** argv) try {
 
         bool run_all_heaps = prompt_yes_no("Run all heap implementations? [Y/n]: ", true);
         std::cout << "Running Dijkstra from " << sources_to_run << " sources per heap (starting at vertex "
-                  << start_source << "). This may take a while." << std::endl;
+              << start_source << "). This may take a while." << std::endl;
 
         std::vector<AggregateStats> aggregates;
         auto run_for_selection = [&](HeapSelection selection) {
-            std::cout << "\n[" << heap_name(selection) << "] beginning all-sources pass..." << std::endl;
+            print_subsection_header(heap_name(selection) + std::string(" Heap"));
+            std::cout << "Beginning all-sources pass..." << std::endl;
             AggregateStats agg;
             agg.heap = selection;
             std::size_t progress_step = std::max<std::size_t>(1, sources_to_run / 10);
@@ -765,7 +821,7 @@ int main(int argc, char** argv) try {
                 RunSummary summary = execute_run(graph, source_vertex, selection, nullptr);
                 accumulate_aggregate(agg, summary);
                 if ((offset + 1) % progress_step == 0 || offset + 1 == sources_to_run) {
-                    std::cout << "  Completed " << (offset + 1) << "/" << sources_to_run
+                    std::cout << "  • Completed " << (offset + 1) << "/" << sources_to_run
                               << " sources\r" << std::flush;
                 }
             }
@@ -827,7 +883,7 @@ int main(int argc, char** argv) try {
     DijkstraResult result;
     RunSummary summary = execute_run(graph, source, selection, &result);
 
-    std::cout << "\n--- Run Summary ---" << std::endl;
+    print_section_header("Run Summary");
     std::cout << "Heap type      : " << heap_name(selection) << std::endl;
     std::cout << "Source vertex  : " << source << std::endl;
     std::cout << "Reachable nodes: " << summary.reachable_nodes << " / " << graph.node_count() << std::endl;
@@ -847,7 +903,7 @@ int main(int argc, char** argv) try {
 
     std::cout << "(Dijkstra already processed the full dataset; the next prompt only controls how many results to display.)" << std::endl;
 
-    std::cout << "\nStructural metrics:" << std::endl;
+    print_subsection_header("Structural Metrics");
     print_structure_metrics(summary.structure);
 
     std::cout.unsetf(std::ios::floatfield);

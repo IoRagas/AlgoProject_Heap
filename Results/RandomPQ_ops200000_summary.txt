@@ -1,0 +1,14 @@
+=== Random PQ Workload Summary (200000 ops) ===
+Mix: Insert 90% | Decrease 5% | Extract 5%
+Heap           Runtime(ms)       Inserts   Insert Avg (us)      Extracts  Extract Avg (us)     Decreases   Decrease Avg (us)
+--------------------------------------------------------------------------------------------------------------------------------
+Binary                  65        179890             0.181         10012             0.358         10098               0.295
+Fibonacci               71        179890             0.124         10012             2.178         10098               0.250
+Hollow                  69        179890             0.185         10012             0.946         10098               0.338
+
+=== Structural Metrics for Random Workload (200000 ops) ===
+Heap            MaxNodes    MaxBytes       MaxMB    Height  MaxRoots    ConsolPasses     LinkOps
+------------------------------------------------------------------------------------------------
+Binary            169878     4377104       4.174        18         1           10012      492667
+Fibonacci         169878    10872192      10.369        19       180           10012      218465
+Hollow            169878    12078448      11.519        18         1           10012      438331

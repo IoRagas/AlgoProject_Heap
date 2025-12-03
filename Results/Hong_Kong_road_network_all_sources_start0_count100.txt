@@ -1,0 +1,13 @@
+=== All-Sources Summary for Hong Kong road network (100 sources) ===
+Heap                Runs  AvgRuntime(ms)  MaxRuntime(ms) TotalRuntime(s)    AvgReachable   Insert Avg (us)  Extract Avg (us) Decrease Avg (us)
+------------------------------------------------------------------------------------------------------------------------------------------------------
+Binary               100          15.470              35           1.547       43620.000             0.081             0.111             0.042
+Fibonacci            100          42.300              82           4.230       43620.000             0.072             0.717             0.041
+Hollow               100          25.130              54           2.513       43620.000             0.174             0.201             0.136
+
+=== Structural Peaks for Hong Kong road network (all-sources) ===
+Heap            MaxNodes    MaxBytes       MaxMB    Height  MaxRoots    ConsolPasses     LinkOps
+------------------------------------------------------------------------------------------------
+Binary               190        4728       0.005         8         1           43595      219461
+Fibonacci            189       12096       0.012         9        17           43618      191109
+Hollow               190     2827296       2.696         8         1           43620      335863
